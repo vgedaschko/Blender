@@ -148,7 +148,8 @@ Alle Teile sind starr mit Gewicht 1,0 an genau einen Bone gebunden.
 6. **Static Mesh / Nanite:** `SM_Leopard2A8.fbx` mit *Combine Meshes* importieren. Die `UCX_`-Hüllen werden
    automatisch zur Kollision. Nanite kann aktiviert werden (z. B. für Wracks oder Set-Dressing).
 7. **Materialien:** Die FBX-Dateien verweisen relativ auf `textures/`; UE5 importiert BaseColor und Normal
-   automatisch. Für das volle PBR-Setup ein Master-Material anlegen: `BaseColor` → Base Color,
+   automatisch. Das FBX verweist auf die OpenGL-Normal-Map (`_Normal_GL`, aus dem Blender-Material): in UE5
+   entweder durch `T_L2A8_<Set>_Normal` (DirectX) ersetzen oder an der Textur *Flip Green Channel* setzen. Für das volle PBR-Setup ein Master-Material anlegen: `BaseColor` → Base Color,
    `Normal` → Normal (Textur als *Normal Map* komprimieren), `ORM` (sRGB aus, Compression *Masks*) mit R →
    Ambient Occlusion, G → Roughness, B → Metallic. Für das Kettenband zusätzlich einen Panner auf V
    (siehe Punkt 4).
