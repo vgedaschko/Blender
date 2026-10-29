@@ -44,23 +44,23 @@
     "roller_r_04"
   ],
   "triangles": {
-    "hull": 25588,
-    "turret_gun": 24440,
+    "hull": 31016,
+    "turret_gun": 26184,
     "running_gear": 43488,
-    "track_links_hd": 25840,
-    "track_belt_ue": 4080,
-    "static_mesh_total": 119356
+    "track_links_hd": 24928,
+    "track_belt_ue": 3936,
+    "static_mesh_total": 125616
   },
   "dimensions_m": {
     "length_gun_forward": 11.02,
     "hull_length": 8.03,
-    "width_overall": 3.819,
-    "height_overall_excl_antennas": 3.05,
-    "ground_clearance": 0.48
+    "width_overall": 3.932,
+    "height_overall_excl_antennas": 3.1,
+    "ground_clearance": 0.52
   },
   "track": {
-    "link_count_per_side": 85,
-    "link_pitch_cm": 18.434,
-    "track_length_cm": 1566.93
+    "link_count_per_side": 82,
+    "link_pitch_cm": 18.408,
+    "track_length_cm": 1509.43
   }
 }

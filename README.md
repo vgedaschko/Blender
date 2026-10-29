@@ -17,15 +17,20 @@ Das Modell hält sich an öffentlich bekannte Eckdaten und ist dazwischen nach E
 | Merkmal | Modell | öffentliche Angabe (ca.) |
 |---|---|---|
 | Länge, Rohr nach vorn | 11,02 m | ~10,97 m |
-| Breite inkl. Schürzen/Trophy | 3,82 m | ~3,77–3,83 m |
-| Höhe (ohne Antennen) | 3,05 m | ~3,0 m |
-| Bodenfreiheit | 0,48 m | ~0,49–0,54 m |
+| Breite inkl. Schürzen/Trophy-Radar | 3,93 m | ~3,77 m ohne Trophy |
+| Höhe (ohne Antennen, inkl. FLW 200) | 3,10 m | ~3,0 m |
+| Bodenfreiheit | 0,52 m | ~0,49–0,54 m |
 | Laufwerk | 7 Laufrollen Ø 700 mm, 4 Stützrollen, Triebrad hinten | wie Original |
-| Kette | 635 mm breit, 85 Glieder je Seite | 635 mm |
+| Kette | 635 mm breit, 82 Glieder je Seite | 635 mm |
 | Kanone | Rh-120 L/55A1 (6,6 m) mit Rauchabsauger und Mündungsreferenzsystem | wie Original |
 
 Alle Werte stehen am Anfang von `leopard2a8/build_leopard2a8.py` als Konstanten und lassen sich anpassen.
 Die gemessenen Werte jedes Builds landen in `export/model_info.json`.
+
+Proportionen und Anordnung wurden zusätzlich mit Fotos abgeglichen (siehe [Referenzen](#referenzen)):
+Laufrollenabstände (vorn enger, hinten weiter), Lage des Triebrads und Wannenüberhang hinten,
+Schürzenhöhe (Laufrollen sichtbar), Lüftungsgitter in der Wannenseite, nach vorn abfallende Turmkeile,
+Trophy-Radarkästen an den Turmseiten und Nebelwurfbecher-Block am Turm.
 
 Angenäherte bzw. vereinfachte Bereiche: Turm- und Keilpanzerungsform, Sichtgeräte (EMES 15, PERI R17A3),
 Waffenstation FLW 200, Trophy-Werfer und Radarpaneele, Motordeck, Heck, Schwingarme.
@@ -43,8 +48,8 @@ export/model_info.json           gemessene Maße, Dreieckszahlen, Bone-Liste
 renders/                         Vorschaubilder (Cycles)
 ```
 
-Dreiecke: Wanne ~26k, Turm+Kanone ~24k, Laufwerk ~43k, Kettenband 4k (UE-Skeletal ≈ 98k);
-Static Mesh mit Einzelgliedern ≈ 119k.
+Dreiecke: Wanne ~31k, Turm+Kanone ~26k, Laufwerk ~43k, Kettenband 4k (UE-Skeletal ≈ 104k);
+Static Mesh mit Einzelgliedern ≈ 126k.
 
 ## Neu erzeugen
 
@@ -108,11 +113,11 @@ Alle Teile sind starr mit Gewicht 1,0 an genau einen Bone gebunden.
    steuern (`turret` Yaw, `gun` Pitch).
 4. **Kette, Variante A (einfach):** Das Kettenband nutzt pro UV-Kachel in V genau ein Kettenglied. Ein
    Panner auf der V-Koordinate, gekoppelt an die Fahrgeschwindigkeit
-   (`V-Offset = gefahrene Strecke / 18,43 cm`), lässt die Kette laufen. Als Textur eignet sich ein
+   (`V-Offset = gefahrene Strecke / 18,41 cm`), lässt die Kette laufen. Als Textur eignet sich ein
    Normal/Height-Bake von `SM_Leopard2A8_TrackLink`.
 5. **Kette, Variante B (detailliert):** `SM_Leopard2A8_TrackLink.fbx` importieren und mit den Punkten aus
    `track_path_ue.json` je Seite einen geschlossenen Spline aufbauen. Die Glieder per Instanced Static Mesh
-   gleichmäßig verteilen (85 Glieder je Seite, Teilung 18,43 cm) und entlang des Splines verschieben.
+   gleichmäßig verteilen (82 Glieder je Seite, Teilung 18,41 cm) und entlang des Splines verschieben.
    Die Punkte liegen bereits in UE-Koordinaten (cm, Y gespiegelt).
 6. **Static Mesh / Nanite:** `SM_Leopard2A8.fbx` mit *Combine Meshes* importieren. Die `UCX_`-Hüllen werden
    automatisch zur Kollision. Nanite kann aktiviert werden (z. B. für Wracks oder Set-Dressing).
@@ -133,6 +138,15 @@ Alle Teile sind starr mit Gewicht 1,0 an genau einen Bone gebunden.
    Tür oder mit Genehmigung der Bundeswehr bzw. eines Nutzerstaats.
 3. **Lizenzierte Daten:** Für ein kommerzielles Projekt ist eine Anfrage bei KNDS der einzige Weg zu
    herstellernahen Daten.
+
+## Referenzen
+
+Für den Formabgleich wurden Fotos aus Wikimedia Commons genutzt. Die Bilder sind nicht im Repository
+enthalten; Urheber und Lizenzen stehen auf den jeweiligen Dateiseiten:
+
+- [Category:Leopard 2A8](https://commons.wikimedia.org/wiki/Category:Leopard_2A8) und
+  [Category:Leopard 2A8 prototypes](https://commons.wikimedia.org/wiki/Category:Leopard_2A8_prototypes)
+  (u. a. Seitenansicht auf Tieflader, Eurosatory-Aufnahmen von Bug, Turmseite und Laufwerk)
 
 ## Rechtlicher Hinweis
 

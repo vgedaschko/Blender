@@ -40,7 +40,7 @@ HULL_X0, HULL_X1 = -3.86, 3.86      # Wannenlaenge ~7,7 m
 LOWER_W = 1.02                      # halbe Breite Unterwanne (zwischen den Ketten)
 UPPER_W = 1.72                      # halbe Breite Oberwanne (ueber den Ketten)
 SPONSON_Z = 1.24                    # Unterkante Oberwanne
-DECK_Z = 1.80                       # Hoehe Motordeck / Wannendach
+DECK_Z = 1.85                       # Hoehe Motordeck / Wannendach
 BELLY_Z = 0.52                      # Bodenfreiheit inkl. Minenschutzplatte
 
 TRACK_Y = 1.39                      # Kettenmitte (Spurweite ~2,78 m)
@@ -50,14 +50,16 @@ TRACK_PITCH = 0.184                 # Kettengliedteilung (Naeherung)
 
 RW_R = 0.35                         # Laufrollen-Radius (~700 mm Durchmesser)
 RW_Z = TRACK_T + RW_R               # Laufrollen-Mittelpunkt
-RW_X = [2.40, 1.60, 0.76, -0.06, -0.86, -1.66, -2.46]   # 7 Laufrollen je Seite
-SPROCKET = (-3.32, 0.78, 0.32)      # Triebrad hinten (x, z, Teilkreisradius)
+# 7 Laufrollen je Seite; vorn enger, hinten weiter (nach Seitenfotos)
+RW_X = [2.45, 1.715, 0.98, 0.255, -0.58, -1.455, -2.29]
+SPROCKET = (-3.02, 0.80, 0.32)      # Triebrad hinten (x, z, Teilkreisradius)
 IDLER = (3.30, 0.74, 0.32)          # Leitrad vorn
 ROLLER_R = 0.10
 ROLLER_Z = 1.00
-ROLLER_X = [1.95, 0.60, -0.80, -2.20]  # 4 Stuetzrollen je Seite
+ROLLER_X = [1.95, 0.62, -0.80, -2.10]  # 4 Stuetzrollen je Seite
 
 TURRET_X = 0.20                     # Mitte Turmdrehkranz
+TURRET_DZ = DECK_Z - 1.80          # Turm wird nach dem Bau um diesen Betrag angehoben
 TURRET_Z = 1.87                     # Unterkante Turm
 ROOF_Z = 2.56                       # Turmdach
 GUN_X, GUN_Z = 1.30, 2.22           # Schildzapfen (Hoehenrichtachse)
@@ -226,6 +228,10 @@ class Part:
             bm.faces.new(rings[0])
             bm.faces.new(list(reversed(rings[-1])))
         self._tag([v for r in rings for v in r], surf)
+
+    def shift(self, dz):
+        bmesh.ops.translate(self.bm, verts=self.bm.verts[:], vec=(0, 0, dz))
+        self.pivot.z += dz
 
     def bolts(self, pts, normal, r=0.018, h=0.015, surf="metal", seg=6):
         n = Vector(normal).normalized()
@@ -406,7 +412,7 @@ def build_hull():
     d.hull([(2.95, y, z) for y in (-1.0, 1.0) for z in (BELLY_Z, 0.565)] +
            [(3.30, y, 0.80) for y in (-0.95, 0.95)])
     # Turmdrehkranz-Schutzring
-    d.cyl((TURRET_X, 0, DECK_Z - 0.01), (TURRET_X, 0, TURRET_Z - 0.005), 1.17, seg=64)
+    d.cyl((TURRET_X, 0, DECK_Z - 0.01), (TURRET_X, 0, TURRET_Z + TURRET_DZ - 0.005), 1.17, seg=64)
     # Seitliche Kettenabdeckung vorn (Kotfluegel) mit Scheinwerfern
     for s in (-1, 1):
         d.hull([(3.50, s * 1.06, 1.38), (3.50, s * 1.80, 1.38), (3.50, s * 1.06, 1.32), (3.50, s * 1.80, 1.32),
@@ -423,12 +429,22 @@ def build_hull():
     d.cyl((2.05, -0.68, DECK_Z), (2.05, -0.68, DECK_Z + 0.05), 0.36, seg=32)
     d.cyl((2.05, -0.68, DECK_Z + 0.05), (2.05, -0.68, DECK_Z + 0.11), 0.31, seg=32)
     for dy in (-0.22, 0.0, 0.22):
-        d.box((2.42, -0.68 + dy, 1.76), (0.10, 0.17, 0.07), rot=(0, -16, 0))
-        d.box((2.475, -0.68 + dy, 1.76), (0.008, 0.13, 0.04), surf="glass", rot=(0, -16, 0))
+        d.box((2.42, -0.68 + dy, DECK_Z - 0.03), (0.10, 0.17, 0.07), rot=(0, -16, 0))
+        d.box((2.475, -0.68 + dy, DECK_Z - 0.03), (0.008, 0.13, 0.04), surf="glass", rot=(0, -16, 0))
     # Werkzeug-/Staukaesten auf den Kettenabdeckungen hinten
     for s in (-1, 1):
         for x0, x1 in ((-1.05, -2.15), (-2.30, -3.55)):
-            d.box_mm((x1, min(s * 1.42, s * 1.70), DECK_Z), (x0, max(s * 1.42, s * 1.70), 1.98))
+            d.box_mm((x1, min(s * 1.42, s * 1.70), DECK_Z), (x0, max(s * 1.42, s * 1.70), DECK_Z + 0.18))
+        # Lueftungsgitter in der Wannenseite (unter dem Turmheck)
+        for x0, x1 in ((-0.95, -0.55), (-1.45, -1.05)):
+            yo = s * (UPPER_W + 0.01)
+            d.box_mm((x0, min(yo, s * (UPPER_W - 0.02)), 1.52), (x1, max(yo, s * (UPPER_W - 0.02)), 1.78), "dark")
+            for i in range(6):
+                d.box(((x0 + x1) / 2, s * (UPPER_W + 0.02), 1.55 + i * 0.04), (x1 - x0, 0.02, 0.012), "metal",
+                      rot=(s * 35, 0, 0))
+    # Mittlerer Aufbau auf dem Bugmodul
+    d.hull([(3.52, y, z) for y in (-0.55, 0.55) for z in (1.38, 1.50)] +
+           [(3.80, y, z) for y in (-0.52, 0.52) for z in (1.36, 1.44)])
     parts.append(d)
 
     # Motordeck-Gitter (Ansaug- und Kuehlerluftgitter)
@@ -485,24 +501,29 @@ def build_hull():
         for i in range(3):
             x1, x0 = xs[i] - 0.008, xs[i + 1] + 0.008
             yi, yo = s * 1.765, s * 1.885
-            pts = [(x0, y, z) for y in (yi, yo) for z in (0.48, 1.38)]
+            # Unterkante etwa auf Hoehe der Laufrollen-Oberkante (Laufrollen bleiben sichtbar)
+            pts = [(x0, y, z) for y in (yi, yo) for z in (0.80, 1.46)]
             if i == 0:
-                pts += [(x1, yi, 0.80), (x1 - 0.14, yo, 0.56), (x1, yi, 1.38), (x1, yo, 1.38),
-                        (x1 - 0.22, yi, 0.48), (x1 - 0.24, yo, 0.52)]
+                pts += [(x1, yi, 1.00), (x1 - 0.14, yo, 0.86), (x1, yi, 1.46), (x1, yo, 1.46),
+                        (x1 - 0.22, yi, 0.80), (x1 - 0.24, yo, 0.82)]
             else:
-                pts += [(x1, y, z) for y in (yi, yo) for z in (0.48, 1.38)]
+                pts += [(x1, y, z) for y in (yi, yo) for z in (0.80, 1.46)]
             k.hull(pts)
             bolt_x = [x0 + (x1 - x0) * f for f in (0.15, 0.5, 0.85)]
-            k.bolts([(bx, yo, z) for bx in bolt_x for z in (0.64, 1.24)], (0, s, 0), r=0.022, h=0.012)
+            k.bolts([(bx, yo, z) for bx in bolt_x for z in (0.90, 1.36)], (0, s, 0), r=0.022, h=0.012)
         xs = [1.06, -0.12, -1.30, -2.48, -3.66]
         for i in range(4):
             x1, x0 = xs[i] - 0.008, xs[i + 1] + 0.008
             y0, y1 = sorted((s * 1.765, s * 1.80))
-            k.box_mm((x0, y0, 0.60), (x1, y1, 1.38))
-            k.box_mm((x0, y0, 0.52), (x1, y1, 0.60), "rubber")
+            k.box_mm((x0, y0, 0.80), (x1, y1, 1.46))
         # Schuerzen-Halteleiste an der Oberwanne
         y0, y1 = sorted((s * 1.72, s * 1.78))
-        k.box_mm((-3.70, y0, 1.32), (3.62, y1, 1.40))
+        k.box_mm((-3.70, y0, 1.40), (3.62, y1, 1.48))
+        # V-foermige Daempfer-/Anschlagkonsolen unter der Schuerze
+        for x in (RW_X[0], RW_X[1], RW_X[5], RW_X[6]):
+            for dx in (-0.17, 0.17):
+                k.beam((x + dx, s * 1.74, 0.82), (x, s * 1.74, 0.66), 0.04, 0.05)
+            k.box((x, s * 1.74, 0.66), (0.08, 0.05, 0.05), "metal")
         parts.append(k)
     return parts
 
@@ -762,8 +783,9 @@ def build_turret():
     a = Part("Turret_Armor", "turret", "turret", pivot=tp, bevel=0.015)
     for s in (-1, 1):
         # Pfeilfoermige Keilpanzerung vorn (seit 2A5)
-        a.hull([(2.24, s * y, z) for y in (0.40, 1.78) for z in (1.90, 2.60)] +
-               [(3.12, s * 0.40, 1.94), (2.84, s * 0.40, 2.60), (2.44, s * 1.78, 1.94), (2.34, s * 1.78, 2.60)])
+        # Oberseite faellt zur Spitze hin ab, Vorderkante pfeilfoermig nach aussen-hinten
+        a.hull([(2.24, s * y, z) for y in (0.40, 1.78) for z in (1.90, 2.62)] +
+               [(3.14, s * 0.40, 1.94), (3.10, s * 0.40, 2.22), (2.46, s * 1.78, 1.94), (2.40, s * 1.78, 2.42)])
         # Seitenmodule vorn
         a.hull([(0.30, s * 1.70, z) for z in (1.90, 2.54)] + [(0.30, s * 1.88, z) for z in (1.94, 2.50)] +
                [(2.26, s * 1.74, z) for z in (1.90, 2.56)] + [(2.18, s * 1.88, z) for z in (1.94, 2.50)])
@@ -846,40 +868,49 @@ def build_turret():
     wp.box(rp + Vector((0.272, -0.15, 0.08)), (0.006, 0.10, 0.14), "glass")
     parts.append(wp)
 
-    # Trophy-Schutzsystem (2A8): Werfer + Radarpaneele
+    # Trophy-Schutzsystem (2A8): Radarkaesten an den Turmseiten, Werfer obenauf
     for s, side in ((1, "l"), (-1, "r")):
-        tc = Vector((-1.05, s * 1.50, ROOF_Z))
+        tc = Vector((-1.15, s * 1.74, ROOF_Z + 0.02))
         tr = Part(f"Trophy_Launcher_{side.upper()}", f"trophy_{side}", "turret", pivot=tc, bevel=0.01)
-        tr.cyl(tc, tc + Vector((0, 0, 0.10)), 0.22, seg=32)
-        tr.hull([tc + Vector((x, y, z)) for x in (-0.24, 0.24) for y in (-0.16, 0.16) for z in (0.10, 0.36)] +
-                [tc + Vector((0.30, y, z)) for y in (-0.12, 0.12) for z in (0.14, 0.32)])
-        tr.box(tc + Vector((0.0, s * 0.165, 0.24)), (0.30, 0.012, 0.16), "dark")
+        tr.cyl(tc, tc + Vector((0, 0, 0.10)), 0.18, seg=32)
+        tr.hull([tc + Vector((x, y, z)) for x in (-0.22, 0.22) for y in (-0.15, 0.15) for z in (0.10, 0.34)] +
+                [tc + Vector((0.28, y, z)) for y in (-0.11, 0.11) for z in (0.14, 0.30)])
+        tr.box(tc + Vector((0.0, s * 0.155, 0.22)), (0.28, 0.012, 0.15), "dark")
         parts.append(tr)
     rd = Part("Turret_Trophy_Radars", "turret", "turret", pivot=tp, bevel=0.008)
     for s in (-1, 1):
-        for c, yaw in (((0.12, s * 1.79, 2.26), s * 65), ((-1.62, s * 1.66, 2.30), s * 120)):
-            rot = (0, 0, yaw - 90 * s)
-            rd.box(c, (0.42, 0.07, 0.34), rot=rot)
-            n = Vector((math.cos(math.radians(yaw)), math.sin(math.radians(yaw)), 0))
-            rd.box(Vector(c) + n * 0.036, (0.34, 0.006, 0.26), "dark", rot=rot)
-            rd.beam(Vector(c) - n * 0.03 + Vector((0, 0, -0.18)), Vector(c) - n * 0.15 + Vector((0, 0, -0.30)), 0.05, 0.05)
+        # hinterer Radarkasten an der Turmseite (Gitterflaeche nach aussen)
+        yi, yo = s * 1.60, s * 1.90
+        rd.hull([(x, y, z) for x in (-0.72, -1.58) for y in (yi, yo) for z in (2.02, ROOF_Z + 0.02)] +
+                [(-0.62, yi, z) for z in (2.06, ROOF_Z - 0.02)])
+        rd.box((-1.15, s * 1.905, 2.30), (0.70, 0.012, 0.42), "dark")
+        for k in range(6):
+            rd.box((-0.85 - k * 0.12, s * 1.912, 2.30), (0.012, 0.012, 0.42), "metal")
+        for k in range(4):
+            rd.box((-1.15, s * 1.912, 2.14 + k * 0.11), (0.70, 0.012, 0.012), "metal")
+        # vorderes Radarpaneel, schraeg nach vorn-aussen
+        c, yaw = Vector((0.18, s * 1.76, 2.27)), s * 55
+        rot = (0, 0, yaw - 90 * s)
+        rd.box(c, (0.46, 0.09, 0.40), rot=rot)
+        n = Vector((math.cos(math.radians(yaw)), math.sin(math.radians(yaw)), 0))
+        rd.box(c + n * 0.046, (0.38, 0.006, 0.32), "dark", rot=rot)
+        rd.beam(c - n * 0.04 + Vector((0, 0, -0.20)), c - n * 0.14 + Vector((0, 0, -0.32)), 0.05, 0.05)
     parts.append(rd)
 
     # Ausstattung: Nebelwurfbecher, Antennen, Windsensor, Heckkorb, Stauraum
     x = Part("Turret_Details", "turret", "turret", pivot=tp, bevel=0.006)
     for s in (-1, 1):
-        x.box((-2.05, s * 1.40, ROOF_Z - 0.04), (0.50, 0.18, 0.08))
+        # Nebelwurfbecher: 4er-Block an der Turmseite zwischen Seitenmodul und Trophy
+        x.box((-0.27, s * 1.80, 2.44), (0.52, 0.16, 0.14))
         for k in range(4):
-            base = Vector((-2.25 + k * 0.13, s * 1.40, ROOF_Z))
-            d = Vector((0.55, s * 0.35, 0.75)).normalized()
-            x.cyl(base, base + d * 0.24, 0.047, seg=16)
-            x.cyl(base + d * 0.24, base + d * 0.245, 0.04, seg=16, surf="dark")
+            base = Vector((-0.46 + k * 0.125, s * 1.82, 2.50))
+            d = Vector((0.25, s * 0.40, 0.88)).normalized()
+            x.cyl(base, base + d * 0.26, 0.047, seg=16)
+            x.cyl(base + d * 0.26, base + d * 0.265, 0.04, seg=16, surf="dark")
         # Antennen
         ab = Vector((-2.30, s * 1.02, ROOF_Z - 0.04))
         x.cyl(ab, ab + Vector((0, 0, 0.14)), 0.055, seg=16)
         x.cyl(ab + Vector((0, 0, 0.14)), ab + Vector((0, 0, 1.95)), 0.010, 0.005, seg=6, surf="dark")
-        # Staukaesten Turmseite hinten
-        x.box((-0.40, s * 1.66, 2.24), (0.80, 0.16, 0.50))
     # Windsensor
     x.cyl((-1.95, -0.35, ROOF_Z - 0.02), (-1.95, -0.35, 2.95), 0.02, seg=8, surf="metal")
     x.box((-1.95, -0.35, 2.97), (0.10, 0.10, 0.06))
@@ -893,6 +924,8 @@ def build_turret():
     x.box((-2.80, 0.55, 2.24), (0.30, 1.10, 0.26))
     x.box((-2.80, -0.70, 2.22), (0.30, 0.90, 0.22))
     parts.append(x)
+    for part in parts:
+        part.shift(TURRET_DZ)
     return parts
 
 
@@ -929,6 +962,17 @@ def build_armature(coll):
         bones.append((f"sprocket_{side}", "root", (SPROCKET[0], y, SPROCKET[1]), lat))
         for i, x in enumerate(ROLLER_X, 1):
             bones.append((f"roller_{side}_{i:02d}", "root", (x, y, ROLLER_Z), lat))
+
+    # Turm-Bones mit dem Turm anheben (siehe TURRET_DZ)
+    parent_of = {n: par for n, par, _, _ in bones}
+
+    def in_turret(n):
+        while n:
+            if n == "turret":
+                return True
+            n = parent_of[n]
+        return False
+    bones = [(n, par, (h[0], h[1], h[2] + TURRET_DZ) if in_turret(n) else h, t) for n, par, h, t in bones]
 
     data = bpy.data.armatures.new("Armature")
     arm = bpy.data.objects.new("Armature", data)   # Name "Armature" -> UE5 legt keinen Extra-Root an
@@ -1230,7 +1274,7 @@ def main():
         cols = [ucx("UCX_SM_Leopard2A8_00", body, tmp),
                 ucx("UCX_SM_Leopard2A8_01", [o for o in turret if o.name in ("Turret_Body", "Turret_Armor")], tmp),
                 ucx("UCX_SM_Leopard2A8_02", [], tmp, extra=[(x, y, z) for x in (2.7, MUZZLE_X)
-                                                           for y in (-0.2, 0.2) for z in (GUN_Z - 0.2, GUN_Z + 0.2)])]
+                                                           for y in (-0.2, 0.2) for z in (GUN_Z + TURRET_DZ - 0.2, GUN_Z + TURRET_DZ + 0.2)])]
         select_only([sm] + cols)
         bpy.ops.export_scene.fbx(filepath=os.path.join(out, "SM_Leopard2A8.fbx"), object_types={"MESH"}, **FBX_COMMON)
         info["triangles"]["static_mesh_total"] = tri_count([sm])
