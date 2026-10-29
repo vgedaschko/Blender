@@ -41,7 +41,9 @@ Waffenstation FLW 200, Trophy-Werfer und Radarpaneele, Motordeck, Heck, Schwinga
 
 ```
 leopard2a8/build_leopard2a8.py   Generator (Geometrie, UVs, Materialien, Rig, Export, Vorschau)
+leopard2a8/bake_l2a8.py          Textur-Bake (Normal, AO, prozeduraler Lack/Abrieb/Schmutz -> PBR)
 export/Leopard2A8.blend          Blender-Szene (Collections je Baugruppe, Rig, Kamera/Licht)
+export/textures/                 PBR-Texturen je Texture-Set: BaseColor, Normal (DirectX), Normal_GL, ORM
 export/SK_Leopard2A8.fbx         Skeletal Mesh für UE5 (41 Bones, Kettenband für UV-Panner)
 export/SM_Leopard2A8.fbx         Static Mesh (Einzelkettenglieder) + UCX-Kollision, z. B. für Nanite
 export/SM_Leopard2A8_TrackLink.fbx  einzelnes Kettenglied für Spline-/Instanz-Ketten
@@ -66,6 +68,14 @@ pip install bpy && python leopard2a8/build_leopard2a8.py --out export --renders 
 Optionen: `--no-export`, `--no-render`, `--samples N`. Ein Durchlauf ohne Rendern dauert etwa 5 Sekunden.
 Das Skript lässt sich auch im Blender-Texteditor mit „Run Script“ ausführen.
 
+Texturen backen (Cycles, CPU) mit `--bake`, dazu `--tex-size 2048` (Standard) und `--bake-samples 64`:
+
+```bash
+python leopard2a8/build_leopard2a8.py --out export --renders renders --bake --tex-size 2048
+```
+
+Mit 2048 px dauert das auf 4 CPU-Kernen etwa 20 Minuten, mit `--tex-size 1024` etwa 5 Minuten.
+
 ## Aufbau
 
 **Koordinaten:** Blender +X = Front, +Y = links, +Z = oben, 1 Einheit = 1 m, Nullpunkt am Boden unter der
@@ -83,10 +93,24 @@ Skalierung 1,0 hat. Das Armature-Objekt heißt `Armature`, damit UE5 keinen zus�
 | `MI_L2A8_Track` | Kette (Band bzw. Glieder) |
 | `MI_L2A8_Optics` | Glasflächen |
 
-Jede Gruppe hat ihren eigenen, überlappungsfreien UV-Atlas. Die Oberflächenart (Lack, Stahl, Gummi, dunkel,
-Glas) steckt als Vertex-Farbe `ColorID` im Mesh. In Substance Painter dient sie als ID-Maske, in UE5 kann sie
-direkt im Material genutzt werden. Die Tarnfarbe in den Blender-Renderings ist ein prozeduraler Shader und
-wird nicht exportiert. In UE5 kommt nur die Grundfarbe an.
+Jede Gruppe hat ihren eigenen, überlappungsfreien UV-Atlas. Baugleiche Räder teilen sich die UVs der
+jeweiligen Vorlage (höhere Texeldichte), alle Kettenglieder die UVs eines Glieds. Das Kettenband hat ein
+eigenes Material `MI_L2A8_TrackBelt` mit einer Kachel pro Kettenglied. Die Oberflächenart (Lack, Stahl,
+Gummi, dunkel, Glas) steckt zusätzlich als Vertex-Farbe `ColorID` im Mesh und dient in Substance Painter als
+ID-Maske.
+
+**Gebackene Texturen** (`export/textures/T_L2A8_<Set>_*.png`):
+
+| Map | Inhalt | UE5-Einstellung |
+|---|---|---|
+| `BaseColor` | NATO-Dreifarbtarnung, Kantenabrieb (blankes Metall), Staub unten und in Vertiefungen, Balkenkreuz am Turm | sRGB |
+| `Normal` | Schweißnähte an Plattenstößen, Walz-/Gussstruktur, Antirutschbelag auf waagerechten Flächen (DirectX, Grün invertiert) | Normalmap |
+| `Normal_GL` | dieselbe Map im OpenGL-Format (für Blender) | – |
+| `ORM` | R = Ambient Occlusion, G = Roughness, B = Metallic | sRGB aus, Masks |
+
+Die Schweißnähte entstehen automatisch aus den scharfen Kanten von Wanne und Turm (High-Poly-Raupen, auf das
+Low-Poly-Modell gebacken). Die Tarnung, der Abrieb und der Schmutz kommen aus einem prozeduralen Shader, der als
+Emission in die Texturen gebacken wird. Damit sind sie in UE5 und in jedem anderen Programm identisch.
 
 **Bones** (alle unter `root`):
 
@@ -123,6 +147,11 @@ Alle Teile sind starr mit Gewicht 1,0 an genau einen Bone gebunden.
    Die Punkte liegen bereits in UE-Koordinaten (cm, Y gespiegelt).
 6. **Static Mesh / Nanite:** `SM_Leopard2A8.fbx` mit *Combine Meshes* importieren. Die `UCX_`-Hüllen werden
    automatisch zur Kollision. Nanite kann aktiviert werden (z. B. für Wracks oder Set-Dressing).
+7. **Materialien:** Die FBX-Dateien verweisen relativ auf `textures/`; UE5 importiert BaseColor und Normal
+   automatisch. Für das volle PBR-Setup ein Master-Material anlegen: `BaseColor` → Base Color,
+   `Normal` → Normal (Textur als *Normal Map* komprimieren), `ORM` (sRGB aus, Compression *Masks*) mit R →
+   Ambient Occlusion, G → Roughness, B → Metallic. Für das Kettenband zusätzlich einen Panner auf V
+   (siehe Punkt 4).
 
 ## Bekannte Grenzen
 
@@ -130,6 +159,11 @@ Alle Teile sind starr mit Gewicht 1,0 an genau einen Bone gebunden.
   nicht gemeinsam. Abhilfe: zusätzliche Federungs-Bones und Gewichte für das Kettenband.
 - Die obere Kettenlinie liegt gerade auf den Stützrollen auf, es gibt keinen Durchhang.
 - Es gibt kein Innenleben und keine LODs (UE5 kann LODs automatisch erzeugen; Nanite für das Static Mesh).
+- Die Texturen sind prozedural, nicht von Hand bemalt: keine Beschriftungen, Nummernschilder oder gezielten
+  Verschleißspuren. Für ein Hero-Asset empfiehlt sich ein Durchgang in Substance Painter auf Basis der
+  vorhandenen UVs, der `ColorID`-Maske und der gebackenen Maps.
+- In der Normal Map haben einige verdeckte Innenflächen (ineinandergesteckte Bauteile) falsche Farben;
+  sichtbar ist das nicht.
 - Alle Details sind angenähert (siehe oben). Für Nahaufnahmen empfiehlt sich eine Nachmodellierung nach Fotos.
 
 ## Genauer werden
@@ -143,8 +177,9 @@ Alle Teile sind starr mit Gewicht 1,0 an genau einen Bone gebunden.
 
 ## Referenzen
 
-Für den Formabgleich wurden Fotos aus Wikimedia Commons genutzt. Die Bilder sind nicht im Repository
-enthalten; Urheber und Lizenzen stehen auf den jeweiligen Dateiseiten:
+Für den Maßabgleich wurden maßstäbliche Risszeichnungen des Leopard 2A6 (Seite, Draufsicht, Front/Heck)
+genutzt, für 2A8-Details Fotos aus Wikimedia Commons. Keine dieser Vorlagen ist im Repository enthalten;
+Urheber und Lizenzen der Fotos stehen auf den jeweiligen Dateiseiten:
 
 - [Category:Leopard 2A8](https://commons.wikimedia.org/wiki/Category:Leopard_2A8) und
   [Category:Leopard 2A8 prototypes](https://commons.wikimedia.org/wiki/Category:Leopard_2A8_prototypes)

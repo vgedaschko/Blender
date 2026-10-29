@@ -33,6 +33,12 @@ import bpy  # muss vor bmesh importiert werden (pip-Modul)
 import bmesh
 from mathutils import Matrix, Vector
 
+try:   # Bake-Modul liegt neben diesem Skript
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    import bake_l2a8
+except (ImportError, NameError):
+    bake_l2a8 = None
+
 # =============================================================================
 # Hauptmasse (Meter) - oeffentliche Naeherungswerte
 # =============================================================================
@@ -94,6 +100,7 @@ GROUP_MATERIAL = {
     "gun": "MI_L2A8_Gun",
     "wheels": "MI_L2A8_RunningGear",
     "track": "MI_L2A8_Track",
+    "track_belt": "MI_L2A8_TrackBelt",
 }
 GLASS_MATERIAL = "MI_L2A8_Optics"
 
@@ -113,10 +120,11 @@ def _euler_deg(rot):
 class Part:
     """Sammelt Geometrie (Weltkoordinaten) fuer ein Objekt, das an einem Bone haengt."""
 
-    def __init__(self, name, bone, group, pivot=(0, 0, 0), bevel=0.012):
+    def __init__(self, name, bone, group, pivot=(0, 0, 0), bevel=0.012, weld=False):
         self.name, self.bone, self.group = name, bone, group
         self.pivot = Vector(pivot)
         self.bevel = bevel
+        self.weld = weld            # scharfe Kanten als Schweissnaehte fuer die Normal Map merken
         self.bm = bmesh.new()
         self.surf = self.bm.faces.layers.int.new("surf")
 
@@ -188,13 +196,14 @@ class Part:
             bm.faces.new((b[i], b[j], t[j], t[i]))
         self._tag(b + t, surf)
 
-    def lathe(self, center, axis, prof, seg=32, surf="paint"):
-        """Rotationskoerper: prof = [(axial, radius), ...]; surf = str oder Liste je Segment."""
+    def lathe(self, center, axis, prof, seg=32, surf="paint", closed=False):
+        """Rotationskoerper: prof = [(axial, radius), ...]; surf = str oder Liste je Segment.
+        closed=True verbindet das letzte Profil wieder mit dem ersten (z. B. Torus)."""
         bm = self.bm
         center, axis = Vector(center), Vector(axis).normalized()
         u = axis.orthogonal().normalized()
         v = axis.cross(u)
-        surfs = surf if isinstance(surf, (list, tuple)) else [surf] * (len(prof) - 1)
+        surfs = surf if isinstance(surf, (list, tuple)) else [surf] * len(prof)
         rings = []
         for a, r in prof:
             c = center + axis * a
@@ -204,8 +213,8 @@ class Part:
                 rings.append([bm.verts.new(c + (u * math.cos(2 * math.pi * i / seg)
                                                  + v * math.sin(2 * math.pi * i / seg)) * r)
                               for i in range(seg)])
-        for k in range(len(rings) - 1):
-            A, B = rings[k], rings[k + 1]
+        for k in range(len(rings) if closed else len(rings) - 1):
+            A, B = rings[k], rings[(k + 1) % len(rings)]
             if len(A) == 1 and len(B) == 1:
                 continue
             sid = SURF[surfs[k]]
@@ -218,9 +227,42 @@ class Part:
                 else:
                     f = bm.faces.new((A[i], A[j], B[j], B[i]))
                 f[self.surf] = sid
-        for ring, s in ((rings[0], surfs[0]), (rings[-1], surfs[-1])):
+        if closed:
+            return
+        for ring, s in ((rings[0], surfs[0]), (rings[-1], surfs[len(prof) - 2])):
             if len(ring) > 1:
                 bm.faces.new(ring)[self.surf] = SURF[s]
+
+    def sphere(self, c, r, seg=8, surf="metal"):
+        prof = [(r * math.cos(a), r * math.sin(a)) for a in
+                [math.pi - k * math.pi / (seg // 2) for k in range(seg // 2 + 1)]]
+        self.lathe(c, (0, 0, 1), [(a, max(rr, 0.0)) for a, rr in prof], seg=seg, surf=surf)
+
+    def tube(self, pts, r, seg=8, surf="metal"):
+        """Rohr/Seil entlang eines Polygonzugs mit Kugelgelenken."""
+        pts = [Vector(p) for p in pts]
+        for a, b in zip(pts, pts[1:]):
+            self.cyl(a, b, r, seg=seg, surf=surf)
+        for p in pts[1:-1]:
+            self.sphere(p, r, seg=seg, surf=surf)
+
+    def handle(self, p0, p1, normal, h=0.07, r=0.012, surf="paint"):
+        """Haltegriff: zwei Fuesse von p0/p1 entlang normal, Querstange dazwischen."""
+        n = Vector(normal).normalized()
+        p0, p1 = Vector(p0), Vector(p1)
+        self.tube([p0, p0 + n * h, p1 + n * h, p1], r, surf=surf)
+
+    def eye(self, c, normal, axis, R=0.04, t=0.012, surf="paint"):
+        """Zurr-/Hebeoese: Sockel + stehender Ring (Ringebene enthaelt normal)."""
+        n, ax = Vector(normal).normalized(), Vector(axis).normalized()
+        c = Vector(c)
+        side = n.cross(ax).normalized()
+        m = Matrix((ax, side, n)).transposed().to_4x4()
+        m.translation = c + n * 0.015
+        self._tag(bmesh.ops.create_cube(self.bm, size=1.0,
+                                        matrix=m @ Matrix.Diagonal((2.2 * t, 2.6 * R, 0.03, 1)))["verts"], surf)
+        prof = [(t * math.sin(a), R + t * math.cos(a)) for a in [k * math.pi / 3 for k in range(6)]]
+        self.lathe(c + n * (0.03 + R), ax, prof, seg=12, surf=surf, closed=True)
 
     def loft(self, sections, surf="paint", cap=True):
         bm = self.bm
@@ -342,10 +384,25 @@ def make_materials():
 # =============================================================================
 # Teil -> Blender-Objekt (Bevel, Normalen, Attribute, Material)
 # =============================================================================
+def weld_edges(bm, min_len=0.12, angle=40):
+    """Scharfe Kanten (Plattenstoesse) als [p1, p2, normal, konvex] fuer gebackene Schweissnaehte."""
+    out = []
+    for e in bm.edges:
+        if len(e.link_faces) != 2 or e.calc_length() < min_len:
+            continue
+        if e.calc_face_angle(0.0) < math.radians(angle):
+            continue
+        n = (e.link_faces[0].normal + e.link_faces[1].normal).normalized()
+        a, b = e.verts[0].co, e.verts[1].co
+        out.extend([*a, *b, *n, 1.0 if e.is_convex else 0.0])
+    return out
+
+
 def finalize(part, coll, mats):
     bm = part.bm
     bmesh.ops.remove_doubles(bm, verts=bm.verts[:], dist=1e-6)
     bmesh.ops.recalc_face_normals(bm, faces=bm.faces[:])
+    welds = weld_edges(bm) if part.weld else []
     bmesh.ops.translate(bm, verts=bm.verts[:], vec=-part.pivot)
     me = bpy.data.meshes.new(part.name)
     bm.to_mesh(me)
@@ -355,6 +412,8 @@ def finalize(part, coll, mats):
     obj.location = part.pivot
     obj["bone"] = part.bone
     obj["group"] = part.group
+    if welds:
+        obj["weld_edges"] = welds
 
     surf = [0] * len(me.polygons)
     me.attributes["surf"].data.foreach_get("value", surf)
@@ -404,7 +463,7 @@ def glacis_z(x):
 
 def build_hull():
     parts = []
-    h = Part("Hull_Body", "root", "hull", bevel=0.02)
+    h = Part("Hull_Body", "root", "hull", bevel=0.02, weld=True)
     # Unterwanne (zwischen den Ketten)
     h.prism([(-3.80, SPONSON_Z + 0.02), (-3.80, 0.80), (-3.52, 0.58), (3.02, 0.56),
              (3.70, 1.00), (3.70, SPONSON_Z + 0.02)], "XZ", -LOWER_W, LOWER_W)
@@ -413,7 +472,7 @@ def build_hull():
              (3.62, 1.40), (HULL_X1, 1.34), (HULL_X1, SPONSON_Z)], "XZ", -UPPER_W, UPPER_W)
     parts.append(h)
 
-    d = Part("Hull_Armor", "root", "hull", bevel=0.015)
+    d = Part("Hull_Armor", "root", "hull", bevel=0.015, weld=True)
     # Frontmodul (2A7/2A8-Zusatzpanzerung Bug)
     d.hull([(3.52, y, z) for y in (-1.60, 1.60) for z in (0.92, 1.38)] +
            [(3.92, y, 1.02) for y in (-1.56, 1.56)] + [(3.97, y, 1.30) for y in (-1.56, 1.56)] +
@@ -532,12 +591,44 @@ def build_hull():
         # Schuerzen-Halteleiste an der Oberwanne
         y0, y1 = sorted((s * 1.72, s * 1.78))
         k.box_mm((-3.70, y0, SKIRT_Z1 - 0.06), (3.62, y1, SKIRT_Z1 + 0.02))
+        # Scharniere an der Schuerzen-Oberkante
+        for x in (3.40, 2.55, 1.70, 0.90, -0.30, -1.48, -2.66, -3.50):
+            k.cyl((x - 0.07, s * 1.80, SKIRT_Z1 - 0.03), (x + 0.07, s * 1.80, SKIRT_Z1 - 0.03), 0.022, seg=10,
+                  surf="metal")
         # V-foermige Daempfer-/Anschlagkonsolen unter der Schuerze
         for x in (RW_X[0], RW_X[1], RW_X[5], RW_X[6]):
             for dx in (-0.17, 0.17):
                 k.beam((x + dx, s * 1.74, SKIRT_Z0 + 0.02), (x, s * 1.74, SKIRT_Z0 - 0.18), 0.04, 0.05)
             k.box((x, s * 1.74, SKIRT_Z0 - 0.18), (0.08, 0.05, 0.05), "metal")
         parts.append(k)
+
+    # Anbauteile: Griffe, Oesen, Abschleppseile, Schmutzfaenger
+    f = Part("Hull_Fittings", "root", "hull", bevel=0.0)
+    for s in (-1, 1):
+        # Zurr-/Hebeoesen an den Wannenecken
+        f.eye((3.30, s * 1.30, glacis_z(3.30)), (0.2, 0, 1), (1, 0, 0))
+        f.eye((-3.60, s * 1.45, DECK_Z), (0, 0, 1), (1, 0, 0))
+        # Haltegriffe: Wannenseite vorn, Heckplatte oben
+        f.handle((2.95, s * UPPER_W, 1.50), (3.25, s * UPPER_W, 1.50), (0, s, 0))
+        f.handle((HULL_X0, s * 0.30, DECK_Z - 0.16), (HULL_X0, s * 0.62, DECK_Z - 0.16), (-1, 0, 0))
+        # Griffe auf dem Motordeck (Wartungsklappen), flach liegend
+        f.handle((-1.30, s * 0.40, DECK_Z + 0.035), (-1.30, s * 0.70, DECK_Z + 0.035), (0, 0, 1), h=0.05)
+        f.handle((-2.55, s * 0.40, DECK_Z + 0.035), (-2.55, s * 0.70, DECK_Z + 0.035), (0, 0, 1), h=0.05)
+        # Schmutzfaenger vorn unter dem Kotfluegel
+        y0, y1 = sorted((s * 1.10, s * 1.78))
+        f.box_mm((3.86, y0, 0.96), (3.89, y1, 1.20), "rubber")
+        # Feuerloescher-Zuggriff an der Wannenseite
+        f.eye((2.70, s * UPPER_W, 1.42), (0, s, 0), (1, 0, 0), R=0.03, t=0.008)
+    # Abschleppseile ueber Kreuz an der Heckplatte, mit Seilkauschen
+    for s, dx in ((1, 0.035), (-1, 0.068)):
+        a_ = Vector((HULL_X0 - dx, s * 1.30, 1.26))
+        b_ = Vector((HULL_X0 - dx, -s * 0.95, 1.10))
+        mid1 = a_.lerp(b_, 0.33) + Vector((-0.01, 0, -0.02))
+        mid2 = a_.lerp(b_, 0.66) + Vector((-0.01, 0, -0.02))
+        f.tube([a_, mid1, mid2, b_], 0.016, surf="metal")
+        for p_, q_ in ((a_, b_), (b_, a_)):     # Kauschen flach an der Heckplatte, in Seilrichtung
+            f.eye(p_, (p_ - q_).normalized(), (1, 0, 0), R=0.035, t=0.012, surf="metal")
+    parts.append(f)
     return parts
 
 
@@ -691,6 +782,17 @@ def build_track_link():
     return p
 
 
+# Querschnitt des Kettenbands (Abstand nach aussen n, Querlage y); U laeuft einmal um den Querschnitt
+BELT_SEC = [(-TRACK_T / 2, -TRACK_W / 2 + 0.04), (-TRACK_T / 2, TRACK_W / 2 - 0.04), (-0.01, TRACK_W / 2),
+            (TRACK_T / 2, TRACK_W / 2 - 0.03), (TRACK_T / 2, -TRACK_W / 2 + 0.03), (-0.01, -TRACK_W / 2)]
+
+
+def belt_ucum():
+    n = len(BELT_SEC)
+    lens = [math.dist(BELT_SEC[i], BELT_SEC[(i + 1) % n]) for i in range(n)]
+    return [sum(lens[:i]) / sum(lens) for i in range(n + 1)]
+
+
 def build_tracks(coll_links, coll_belt, mats):
     poly, seg, total = track_path()
     n_links = round(total / TRACK_PITCH)
@@ -727,18 +829,14 @@ def build_tracks(coll_links, coll_belt, mats):
 
         # --- Variante B: geschlossenes Kettenband fuer UE5 (UV-Panner) ---
         samples = sample_path(poly, seg, total, n_links * 2)
-        ht, hw = TRACK_T / 2, TRACK_W / 2
-        # Querschnitt (n, y) mit U-Koordinate
-        sec = [(-ht, -hw + 0.04), (-ht, hw - 0.04), (-0.01, hw), (ht, hw - 0.03),
-               (ht, -hw + 0.03), (-0.01, -hw)]
+        sec = BELT_SEC
         bm = bmesh.new()
         rings = []
         for (px, pz), (tx, tz) in samples:
             nrm = Vector((tz, -tx))
             rings.append([bm.verts.new((px + nrm.x * n, yc + y, pz + nrm.y * n)) for n, y in sec])
         uv = bm.loops.layers.uv.new("UVMap")
-        lens = [math.dist((sec[i][0], sec[i][1]), (sec[(i + 1) % 6][0], sec[(i + 1) % 6][1])) for i in range(6)]
-        ucum = [sum(lens[:i]) / sum(lens) for i in range(7)]
+        ucum = belt_ucum()
         nr = len(rings)
         for k in range(nr):
             A, B = rings[k], rings[(k + 1) % nr]
@@ -752,7 +850,7 @@ def build_tracks(coll_links, coll_belt, mats):
         me = bpy.data.meshes.new(f"Track_{side}_Belt")
         bm.to_mesh(me)
         bm.free()
-        me.materials.append(mats["track"])
+        me.materials.append(mats["track_belt"])
         me.shade_smooth()
         me.set_sharp_from_angle(angle=math.radians(40))
         col = me.color_attributes.new("ColorID", "FLOAT_COLOR", "CORNER")
@@ -769,10 +867,11 @@ def build_tracks(coll_links, coll_belt, mats):
             "y_cm": round(-yc * 100, 2),
             "points_xz_cm": [[round(px * 100, 2), round(pz * 100, 2)] for (px, pz), _ in samples[::2]],
         }
-    bpy.data.objects.remove(tmpl)
+    tmpl.name = "SM_L2A8_TrackLink"
+    tmpl.hide_render = tmpl.hide_viewport = True     # Vorlage fuer Export und Textur-Bake
     info = {"link_count_per_side": n_links, "link_pitch_cm": round(pitch * 100, 3),
             "track_length_cm": round(total * 100, 2), "sides": path_data}
-    return link_objs, belt_objs, info
+    return link_objs, belt_objs, info, tmpl
 
 
 # =============================================================================
@@ -781,7 +880,7 @@ def build_tracks(coll_links, coll_belt, mats):
 def build_turret():
     parts = []
     tp = Vector((TURRET_X, 0, TURRET_Z))
-    t = Part("Turret_Body", "turret", "turret", pivot=tp, bevel=0.02)
+    t = Part("Turret_Body", "turret", "turret", pivot=tp, bevel=0.02, weld=True)
     # Grundturm (Draufsicht: vorn schmaler, Mitte am breitesten), Seiten oben leicht eingezogen
     t.hull([(x, s * y, TURRET_Z) for x, y in ((1.85, 1.40), (0.60, 1.52), (-0.90, 1.48)) for s in (-1, 1)] +
            [(x, s * y, ROOF_Z) for x, y in ((1.65, 1.36), (0.60, 1.48), (-0.90, 1.44)) for s in (-1, 1)])
@@ -793,7 +892,7 @@ def build_turret():
     t.cyl((TURRET_X, 0, TURRET_Z - 0.01), (TURRET_X, 0, TURRET_Z + 0.05), 1.10, seg=64, surf="dark")
     parts.append(t)
 
-    a = Part("Turret_Armor", "turret", "turret", pivot=tp, bevel=0.015)
+    a = Part("Turret_Armor", "turret", "turret", pivot=tp, bevel=0.015, weld=True)
     for s in (-1, 1):
         # Keilpanzerung (seit 2A5): Pfeil in Drauf- und Seitenansicht, Spitze etwa auf Rohrhoehe
         a.hull([(3.22, s * 0.42, GUN_Z - 0.05), (3.22, s * 0.42, GUN_Z + 0.03),
@@ -818,6 +917,9 @@ def build_turret():
     m.cyl((3.03, 0.25, GUN_Z - 0.12), (3.09, 0.25, GUN_Z - 0.12), 0.045, seg=16, surf="dark")   # Koax-MG
     m.lathe((0, 0, GUN_Z), (1, 0, 0), [(2.90, 0.0), (2.90, 0.20), (3.00, 0.215), (3.95, 0.205),
                                        (4.05, 0.19), (4.05, 0.0)], seg=40)
+    # Gummi-Staubschutz zwischen Blende und Blendenhuelle
+    m.lathe((0, 0, GUN_Z), (1, 0, 0), [(2.98, 0.0), (2.98, 0.255), (3.00, 0.265), (3.04, 0.245), (3.07, 0.262),
+                                       (3.10, 0.240), (3.12, 0.0)], seg=40, surf="rubber")
     parts.append(m)
 
     # Waffenrohr Rh-120 L/55A1 inkl. Waermeschutzhuelle, Rauchabsauger, Muendung
@@ -946,6 +1048,19 @@ def build_turret():
     x.cyl((-1.60, -0.30, ROOF_Z - 0.02), (-1.60, -0.30, 3.00), 0.02, seg=8, surf="metal")
     x.box((-1.60, -0.30, 3.02), (0.10, 0.10, 0.06))
     parts.append(x)
+
+    # Anbauteile Turm: Griffe, Hebeoesen, Tarnnetzhaken
+    f = Part("Turret_Fittings", "turret", "turret", pivot=tp, bevel=0.0)
+    for s in (-1, 1):
+        f.eye((1.20, s * 1.24, ROOF_Z), (0, 0, 1), (1, 0, 0))
+        f.eye((-1.70, s * 0.95 + s * 0.20, ROOF_Z - 0.03), (0, 0, 1), (1, 0, 0))
+        f.handle((0.55, s * 1.40, ROOF_Z), (0.85, s * 1.40, ROOF_Z), (0, 0, 1))
+        f.handle((-1.90, s * 0.25, 2.30), (-1.90, s * 0.55, 2.30), (-1, 0, 0))
+        for x in (0.55, 0.90, 1.25, 1.60):
+            base = Vector((x, s * 1.575, 2.52))
+            f.cyl(base, base + Vector((0, s * 0.05, 0.0)), 0.012, seg=6)
+            f.cyl(base + Vector((0, s * 0.05, 0.0)), base + Vector((0, s * 0.05, 0.035)), 0.012, seg=6)
+    parts.append(f)
     return parts
 
 
@@ -1028,6 +1143,32 @@ def unwrap(objs, margin=0.003):
                              area_weight=0.0, correct_aspect=True, scale_to_bounds=False)
     bpy.ops.object.mode_set(mode="OBJECT")
     bpy.ops.object.select_all(action="DESELECT")
+
+
+def unwrap_shared(objs):
+    """Baugleiche Raeder teilen sich die UVs (hoehere Texelichte): nur Vorlagen auspacken, dann kopieren."""
+    by_name = {o.name: o for o in objs}
+
+    def template(name):
+        for prefix, tmpl in (("RoadWheel_", "RoadWheel_L_01"), ("ReturnRoller_", "ReturnRoller_L_01"),
+                             ("Idler_", "Idler_L"), ("Sprocket_", "Sprocket_L")):
+            if name.startswith(prefix):
+                return tmpl
+        return name
+    uniques = [o for o in objs if template(o.name) == o.name]
+    unwrap(uniques)
+    for o in objs:
+        t = by_name[template(o.name)]
+        if t is o:
+            continue
+        src, dst = t.data, o.data
+        assert len(src.loops) == len(dst.loops), (t.name, o.name)
+        if not dst.uv_layers:
+            dst.uv_layers.new(name="UVMap")
+        uv = [0.0] * (2 * len(src.loops))
+        src.uv_layers[0].data.foreach_get("uv", uv)
+        dst.uv_layers[0].data.foreach_set("uv", uv)
+        o["uv_template"] = t.name
 
 
 # =============================================================================
@@ -1211,7 +1352,43 @@ def parse_args():
     p.add_argument("--no-export", action="store_true")
     p.add_argument("--no-render", action="store_true")
     p.add_argument("--samples", type=int, default=48)
+    p.add_argument("--bake", action="store_true", help="PBR-Texturen backen (BaseColor, Normal, ORM)")
+    p.add_argument("--tex-size", type=int, default=2048)
+    p.add_argument("--bake-samples", type=int, default=64)
     return p.parse_args(argv)
+
+
+def bake_textures(args, out, mats, hull, turret, gear, link_tmpl, track_info):
+    if bake_l2a8 is None:
+        raise RuntimeError("bake_l2a8.py nicht gefunden (muss neben diesem Skript liegen)")
+    sc = bpy.context.scene
+    sc.render.engine = "CYCLES"
+    sc.cycles.device = "CPU"
+    if sc.world is None:
+        sc.world = bpy.data.worlds.new("World")
+    sc.world.light_settings.distance = 0.5          # Reichweite fuer den AO-Bake
+    tex_dir = os.path.join(out, "textures")
+    size = args.tex_size
+    pitch = track_info["link_pitch_cm"] / 100
+    sets = {
+        "hull": (hull, size, None),
+        "turret": ([o for o in turret if o["group"] == "turret"], size, None),
+        "gun": ([o for o in turret if o["group"] == "gun"], size // 2, None),
+        "wheels": ([o for o in gear if "uv_template" not in o], size, None),
+        "track": ([link_tmpl], size // 4, pitch),
+    }
+    paths = {}
+    for group, (objs, sz, chain) in sets.items():
+        paths[group] = bake_l2a8.bake_set(group, objs, tex_dir, sz, args.bake_samples, chain_pitch=chain)
+    paths["track_belt"] = bake_l2a8.bake_belt_tile(link_tmpl, pitch, BELT_SEC, belt_ucum(), tex_dir,
+                                                   size // 4, args.bake_samples)
+    for group, p in paths.items():
+        bake_l2a8.textured_material(mats[group], p)
+    c = bpy.data.collections.get("L2A8_Bake")
+    if c:
+        for o in list(c.objects):
+            bpy.data.objects.remove(o)
+        bpy.data.collections.remove(c)
 
 
 def tri_count(objs):
@@ -1236,18 +1413,20 @@ def main():
     hull = [finalize(p, c_hull, mats) for p in build_hull()]
     gear = [finalize(p, c_gear, mats) for p in build_running_gear()]
     turret = [finalize(p, c_turret, mats) for p in build_turret()]
-    links, belts, track_info = build_tracks(c_links, c_belt, mats)
+    links, belts, track_info, link_tmpl = build_tracks(c_links, c_belt, mats)
 
     # UV-Atlanten je Texture-Set
     unwrap(hull)
     unwrap([o for o in turret if o["group"] == "turret"])
     unwrap([o for o in turret if o["group"] == "gun"])
-    unwrap(gear)
+    unwrap_shared(gear)
 
     arm, bone_names = build_armature(c_rig)
     skin(hull + gear + turret + links + belts, arm)
 
     all_static = hull + gear + turret
+    if args.bake:
+        bake_textures(args, out, mats, hull, turret, gear, link_tmpl, track_info)
     info = {
         "note": "Naeherungsmodell aus oeffentlichen Daten - keine Herstellermasse.",
         "bones": bone_names,
@@ -1289,12 +1468,11 @@ def main():
         info["triangles"]["static_mesh_total"] = tri_count([sm])
 
         # Einzelnes Kettenglied (fuer Spline-/Instanz-basierte Ketten in UE5)
-        link = build_track_link()
-        lo = finalize(link, tmp, mats)
-        unwrap([lo], margin=0.01)
-        select_only([lo])
+        link_tmpl.hide_viewport = False
+        select_only([link_tmpl])
         bpy.ops.export_scene.fbx(filepath=os.path.join(out, "SM_Leopard2A8_TrackLink.fbx"),
                                  object_types={"MESH"}, **FBX_COMMON)
+        link_tmpl.hide_viewport = True
         for o in list(tmp.objects):
             bpy.data.objects.remove(o)
         bpy.data.collections.remove(tmp)
@@ -1314,6 +1492,8 @@ def main():
     c_belt.hide_viewport = True
     bpy.context.preferences.filepaths.save_version = 0
     bpy.ops.wm.save_as_mainfile(filepath=os.path.join(out, "Leopard2A8.blend"), compress=True)
+    bpy.ops.file.make_paths_relative()
+    bpy.ops.wm.save_mainfile(compress=True)
     print("Fertig:", out)
 
 
